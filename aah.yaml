@@ -1,0 +1,67 @@
+# AAH Code Deploy Sample #1 — UI + Custom Agent
+# 직접 개발한 UI (Flask) + 직접 개발한 Agent (AgentCore Runtime). 2 services.
+apiVersion: aah.dev/v1
+kind: AgentDeployment
+
+metadata:
+  name: aah-sample-ui-with-custom-agent
+  display_name: "샘플 #1 · UI + 직접 Agent"
+  description: |
+    삼성생명 데모 홈페이지(Flask) + 직접 코딩한 LangGraph-free RAG Agent.
+    ReAct loop + Anthropic native tool_use + Bedrock KB + Databricks bge-m3.
+  domain: insurance
+  tags: [ui, agent, custom, sample, samsung-life]
+
+services:
+  - id: ui
+    kind: web_service
+    target: app_runner
+    dockerfile: ./services/ui/Dockerfile
+    port: 8000
+    health_path: /healthz
+    env_from_services:
+      AGENT_RUNTIME_ARN: agent.runtime_arn
+    requirements:
+      cpu: "0.25 vCPU"
+      memory: "0.5 GB"
+      min_instances: 1
+      max_instances: 4
+
+  - id: agent
+    kind: agent_runtime
+    target: agentcore_runtime
+    dockerfile: ./services/agent/Dockerfile
+    protocol: HTTP
+    port: 8080
+    health_path: /ping
+    invoke_path: /invocations
+    network_mode: PUBLIC
+
+resources:
+  - id: conversation_memory
+    kind: agentcore_memory
+    description: 대화 컨텍스트 보존
+    required: true
+    consumed_by: [agent]
+    env:
+      memory_id: AGENTCORE_MEMORY_ID
+
+env_by_service:
+  ui:
+    - { name: UI_TITLE,    default: "삼성생명 AI 상담" }
+    - { name: UI_SCENARIO, default: "샘플 #1 · UI + 직접 Agent" }
+    - { name: LOG_LEVEL,   default: "INFO" }
+  agent:
+    - { name: LLM_MODEL_ID,       default: "anthropic.claude-sonnet-4-6" }
+    - { name: BEDROCK_KB_ID,      default: "" }
+    - { name: BEDROCK_KB_REGION,  default: "us-east-1" }
+    - { name: DBX_HOST,           default: "" }
+    - { name: DBX_TOKEN,          default: "" }
+    - { name: DBX_INDEX_NAME,     default: "" }
+    - { name: DBX_EMBED_ENDPOINT, default: "" }
+    - { name: DBX_SSL_VERIFY,     default: "true" }
+    - { name: LOG_LEVEL,          default: "INFO" }
+
+bedrock_models:
+  - anthropic.claude-sonnet-4-6
+  - anthropic.claude-haiku-4-5
