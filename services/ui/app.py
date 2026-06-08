@@ -74,7 +74,7 @@ def chat():
         try: parsed = json.loads(raw)
         except Exception: parsed = {"output": raw}
         return jsonify({
-            "output": parsed.get("output") or parsed.get("answer") or "",
+            "output": parsed.get("output") or parsed.get("final") or parsed.get("answer") or parsed.get("result") or parsed.get("text") or "",
             "citations": parsed.get("citations") or [],
             "session_id": session_id,
             "status_code": r.get("statusCode"),
