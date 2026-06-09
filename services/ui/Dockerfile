@@ -1,5 +1,5 @@
 # App Runner = x86_64 only (ARM64 이미지는 exec format error)
-FROM --platform=linux/amd64 public.ecr.aws/docker/library/python:3.12-slim-bookworm
+FROM public.ecr.aws/docker/library/python:3.12-slim-bookworm
 
 WORKDIR /app
 
