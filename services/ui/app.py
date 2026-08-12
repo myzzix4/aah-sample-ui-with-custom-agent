@@ -9,6 +9,7 @@ env:
   AGENT_RUNTIME_ARN  : 호출할 Agent ARN (필수)
   AWS_REGION         : 기본 us-east-1
 """
+import hashlib
 import json
 import logging
 import os
@@ -52,6 +53,18 @@ def _stream_client():
     return _ac_stream
 
 
+def _rt_session(sid: str) -> str:
+    """AgentCore 는 runtimeSessionId 를 33자 이상으로 요구한다.
+
+    짧으면 호출이 통째로 거부되므로 결정론적으로 늘린다. 난수를 붙이면 매 호출
+    새 세션이 되어 멀티턴이 깨지므로, 같은 입력은 항상 같은 값이 나와야 한다.
+    """
+    sid = (sid or "").strip()
+    if len(sid) >= 33:
+        return sid
+    return (sid + "-" + hashlib.sha256(sid.encode("utf-8")).hexdigest())[:64]
+
+
 def _sse(event: str, data: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
 
@@ -61,7 +74,7 @@ def _invoke_buffered(payload: bytes, session_id: str):
     r = _client().invoke_agent_runtime(
         agentRuntimeArn=AGENT_ARN, payload=payload,
         contentType="application/json", accept="application/json",
-        runtimeSessionId=session_id,
+        runtimeSessionId=_rt_session(session_id),
     )
     raw = r["response"].read().decode("utf-8", errors="replace")
     try: parsed = json.loads(raw)
@@ -135,7 +148,7 @@ def chat_sse():
                 r = _stream_client().invoke_agent_runtime(
                     agentRuntimeArn=AGENT_ARN, payload=payload,
                     contentType="application/json", accept="text/event-stream",
-                    runtimeSessionId=session_id,
+                    runtimeSessionId=_rt_session(session_id),
                 )
                 stream = r["response"]
                 buf = b""

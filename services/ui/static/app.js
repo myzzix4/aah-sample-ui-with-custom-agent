@@ -5,7 +5,18 @@ const sendBtn = document.getElementById('send');
 const fab = document.getElementById('chat-fab');
 const panel = document.getElementById('chat-panel');
 
-let sessionId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+// AgentCore 는 runtimeSessionId 를 33자 이상으로 요구한다. crypto.randomUUID 는
+// 보안 컨텍스트(HTTPS·localhost)에서만 있어서, http 로 열면 undefined 로 떨어진다.
+// 예전 폴백(Math.random().toString(36).slice(2))은 11자 남짓이라 호출이 거부됐고,
+// 화면엔 그 이유가 안 보인 채 "(빈 응답)" 만 남았다.
+function newSessionId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  let s = '';
+  while (s.length < 36) s += Math.random().toString(36).slice(2);
+  return s.slice(0, 36);
+}
+
+let sessionId = newSessionId();
 let firstOpen = true;
 
 function openChat() {
@@ -22,7 +33,7 @@ function closeChat() {
   fab.classList.remove('hidden');
 }
 function newSession() {
-  sessionId = (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).slice(2));
+  sessionId = newSessionId();
   msgs.innerHTML = '';
   addMsg('assistant', '새 대화를 시작합니다. 무엇이 궁금하신가요?');
 }
@@ -65,6 +76,7 @@ async function send() {
     let buf = '';
     let fullText = '';
     let started = false;
+    let errored = false;
 
     while (true) {
       const { value, done } = await reader.read();
@@ -97,11 +109,13 @@ async function send() {
             last.textContent = `🔧 ${parsed.name} ${parsed.ok ? '✓' : '✕'} (${parsed.count || 0} 결과)`;
           }
         } else if (ev === 'error') {
+          errored = true;
           assistantEl.innerHTML = `<span style="color:#ef4444">❌ ${parsed.error || 'error'}</span>`;
         }
       }
     }
-    if (!started && !fullText) {
+    // 에러를 이미 보여줬으면 덮지 않는다 — 원인이 가려지면 디버깅이 불가능하다
+    if (!started && !fullText && !errored) {
       assistantEl.textContent = '(빈 응답)';
     }
   } catch (e) {
