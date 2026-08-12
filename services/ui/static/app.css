@@ -184,3 +184,27 @@ footer { background: #0f172a; color: #94a3b8; padding: 32px 0; font-size: 12px; 
 .msg.assistant .md-quote { margin: .4em 0; padding: .25em .7em;
                            border-left: 3px solid rgba(0,0,0,.18);
                            color: inherit; opacity: .9; }
+
+/* ── 실행 과정(step) ─────────────────────────────────────────────── */
+.steps { margin: 0 0 .4em; font-size: 11px; }
+.steps.hidden { display: none; }
+.steps-head { background: none; border: 0; padding: 0; cursor: pointer;
+              color: #64748b; font-size: 11px; display: flex; align-items: center; gap: .35em; }
+.steps-head:hover { color: #0f172a; }
+.steps-caret { display: inline-block; width: .8em; }
+.steps-spin { display: inline-block; width: .7em; height: .7em; border-radius: 50%;
+              border: 2px solid rgba(37,99,235,.25); border-top-color: #2563eb;
+              animation: steps-rot .8s linear infinite; }
+@keyframes steps-rot { to { transform: rotate(360deg); } }
+.steps-list { margin-top: .35em; padding-left: .5em; border-left: 1px solid rgba(0,0,0,.1); }
+.step-row { display: flex; align-items: flex-start; gap: .4em; padding: .12em 0; }
+.step-dot { width: 6px; height: 6px; border-radius: 50%; margin-top: .45em; flex: 0 0 auto; }
+.step-dot.run { background: #2563eb; animation: steps-pulse 1s ease-in-out infinite; }
+.step-dot.ok { background: #16a34a; }
+.step-dot.bad { background: #ef4444; }
+.step-dot.warn { background: #f59e0b; }
+@keyframes steps-pulse { 50% { opacity: .35; } }
+.step-body { min-width: 0; flex: 1; }
+.step-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.step-model, .step-detail { color: #94a3b8; }
+.step-detail { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

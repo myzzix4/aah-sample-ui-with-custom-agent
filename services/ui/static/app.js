@@ -106,6 +106,64 @@ function mdToHtml(src) {
   return out.join('').replace(/@@CTPHOLE(\d+)@@/g, (m, i) => holes[Number(i)]);
 }
 
+// ── 실행 과정(step) 표시 ────────────────────────────────────────────
+// Control Plane 의 AgentSteps 와 같은 규칙이다. 워크플로우·팀은 노드마다
+// step_begin(running) → step(ok) 이 흘러오고 title·agent_name·model·detail 이
+// 들어있어 무슨 일이 벌어지는지 그대로 보인다. 실행 중엔 펼쳐 두고, 끝나면
+// 접어서 답변을 가리지 않는다.
+//
+// trigger·end 는 배선이라 사용자에게 의미가 없어 뺀다.
+const STEP_HIDE = ['trigger', 'end'];
+
+function stepLabel(s) {
+  return s.agent_name || s.title || s.node_id || '';
+}
+
+function mergeStep(list, d) {
+  const n = Number(d.step || 0);
+  const prev = list.find((x) => x.step === n) || {};
+  const st = {
+    step: n,
+    node_id: d.node_id || prev.node_id || '',
+    node_type: d.node_type || prev.node_type || '',
+    status: d.status || prev.status || '',
+    title: d.title || d.label || prev.title || '',
+    agent_name: d.agent_name || prev.agent_name || '',
+    model: d.model || prev.model || '',
+    detail: d.detail || prev.detail || '',
+  };
+  return list.filter((x) => x.step !== n).concat([st]).sort((a, b) => a.step - b.step);
+}
+
+function renderSteps(box, list, running) {
+  const shown = list.filter((s) => !STEP_HIDE.includes(s.node_type));
+  if (!shown.length) { box.innerHTML = ''; box.classList.add('hidden'); return; }
+  box.classList.remove('hidden');
+
+  const cur = [...shown].reverse().find((s) => s.status === 'running');
+  const open = running || box.dataset.open === '1';
+  const head = running
+    ? `<span class="steps-spin"></span>${cur ? mdEscape(stepLabel(cur)) + ' 실행 중…' : '실행 중…'}`
+    : `<span class="steps-caret">${open ? '▾' : '▸'}</span>과정 ${shown.length}단계 보기`;
+
+  const rows = !open ? '' : shown.map((s) => {
+    const dot = s.status === 'running' ? 'run' : s.status === 'ok' ? 'ok'
+              : s.status === 'blocked' ? 'bad' : 'warn';
+    const model = s.model ? ` · ${mdEscape(s.model.split('.').pop())}` : '';
+    const detail = s.detail ? `<div class="step-detail">${mdEscape(s.detail)}</div>` : '';
+    return `<div class="step-row"><span class="step-dot ${dot}"></span>`
+         + `<div class="step-body"><div class="step-title">${mdEscape(stepLabel(s))}`
+         + `<span class="step-model">${model}</span></div>${detail}</div></div>`;
+  }).join('');
+
+  box.innerHTML = `<button type="button" class="steps-head">${head}</button>`
+                + (open ? `<div class="steps-list">${rows}</div>` : '');
+  box.querySelector('.steps-head').onclick = () => {
+    box.dataset.open = box.dataset.open === '1' ? '0' : '1';
+    renderSteps(box, list, running);
+  };
+}
+
 function addMsg(role, text, opts = {}) {
   const el = document.createElement('div');
   el.className = `msg ${role}`;
@@ -128,6 +186,10 @@ async function send() {
   sendBtn.disabled = true;
 
   addMsg('user', text);
+  const stepsBox = document.createElement('div');
+  stepsBox.className = 'steps hidden';
+  msgs.appendChild(stepsBox);
+  let steps = [];
   const assistantEl = addMsg('assistant', '응답 생성 중…', { thinking: true });
 
   try {
@@ -159,7 +221,11 @@ async function send() {
         let parsed = {};
         try { parsed = JSON.parse(data); } catch (e) {}
 
-        if (ev === 'token') {
+        if (ev === 'step' || ev === 'step_begin' || ev === 'trace') {
+          steps = mergeStep(steps, parsed);
+          renderSteps(stepsBox, steps, true);
+          msgs.scrollTop = msgs.scrollHeight;
+        } else if (ev === 'token') {
           if (!started) { assistantEl.textContent = ''; started = true; }
           fullText += parsed.text || '';
           assistantEl.innerHTML = mdToHtml(fullText);
@@ -181,6 +247,7 @@ async function send() {
         }
       }
     }
+    renderSteps(stepsBox, steps, false);
     // 에러를 이미 보여줬으면 덮지 않는다 — 원인이 가려지면 디버깅이 불가능하다
     if (!started && !fullText && !errored) {
       assistantEl.textContent = '(빈 응답)';
