@@ -41,13 +41,80 @@ window.openChat = openChat;
 window.closeChat = closeChat;
 window.newSession = newSession;
 
+// ── Markdown 렌더링 ────────────────────────────────────────────────
+// 모델 답변은 **굵게**·목록·표 같은 마크다운을 쓴다. 그대로 두면 별표가 그대로
+// 보이므로 최소한만 해석한다. 라이브러리를 쓰지 않는 이유는 컨테이너가 정적
+// 파일만 서빙하기 때문이다(외부 CDN 은 폐쇄망에서 못 받는다).
+//
+// XSS — 먼저 전부 이스케이프하고 그 뒤에 서식을 입힌다. 순서가 바뀌면 모델이
+// 뱉은 <script> 가 그대로 실행된다.
+function mdEscape(s) {
+  return s.replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function mdInline(s) {
+  return s
+    .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+             '<a href="$2" target="_blank" rel="noreferrer">$1</a>')
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+}
+
+function mdToHtml(src) {
+  // 코드블록·인라인코드는 안쪽에 서식을 입히면 안 되므로 먼저 빼둔다
+  const holes = [];
+  const stash = (html) => { holes.push(html); return `@@CTPHOLE${holes.length - 1}@@`; };
+
+  let s = String(src || '').replace(/```[\w-]*\n?([\s\S]*?)```/g,
+    (m, code) => stash(`<pre class="md-pre"><code>${mdEscape(code.replace(/\n$/, ''))}</code></pre>`));
+  s = mdEscape(s);
+  s = s.replace(/`([^`\n]+)`/g, (m, c) => stash(`<code class="md-code">${c}</code>`));
+
+  const out = [];
+  let list = null;                       // 'ul' | 'ol' | null
+  const closeList = () => { if (list) { out.push(`</${list}>`); list = null; } };
+
+  for (const raw of s.split('\n')) {
+    const line = raw.replace(/\s+$/, '');
+    const h = line.match(/^(#{1,4})\s+(.*)$/);
+    const ul = line.match(/^\s*[-*]\s+(.*)$/);
+    const ol = line.match(/^\s*\d+\.\s+(.*)$/);
+    const tr = line.match(/^\s*\|(.+)\|\s*$/);
+    const bq = line.match(/^\s*&gt;\s?(.*)$/);
+
+    if (h) { closeList(); out.push(`<h${h[1].length + 2} class="md-h">${mdInline(h[2])}</h${h[1].length + 2}>`); continue; }
+    if (ul) { if (list !== 'ul') { closeList(); out.push('<ul class="md-list">'); list = 'ul'; }
+              out.push(`<li>${mdInline(ul[1])}</li>`); continue; }
+    if (ol) { if (list !== 'ol') { closeList(); out.push('<ol class="md-list">'); list = 'ol'; }
+              out.push(`<li>${mdInline(ol[1])}</li>`); continue; }
+    if (bq) { closeList(); out.push(`<blockquote class="md-quote">${mdInline(bq[1])}</blockquote>`); continue; }
+    if (tr) { // 표 구분선(|---|---|)은 버리고 나머지 행만 살린다
+      closeList();
+      const cells = tr[1].split('|').map((c) => c.trim());
+      if (cells.every((c) => /^:?-{2,}:?$/.test(c))) continue;
+      out.push(`<div class="md-row">${cells.map((c) => `<span>${mdInline(c)}</span>`).join('')}</div>`);
+      continue;
+    }
+    closeList();
+    // 코드블록 자리표시자만 있는 줄은 <p> 로 감싸지 않는다 — <p><pre> 는
+    // 유효하지 않아 브라우저가 태그를 끊어버린다.
+    if (/^@@CTPHOLE\d+@@$/.test(line)) { out.push(line); continue; }
+    out.push(line ? `<p class="md-p">${mdInline(line)}</p>` : '');
+  }
+  closeList();
+  return out.join('').replace(/@@CTPHOLE(\d+)@@/g, (m, i) => holes[Number(i)]);
+}
+
 function addMsg(role, text, opts = {}) {
   const el = document.createElement('div');
   el.className = `msg ${role}`;
   if (opts.thinking) {
     el.innerHTML = `<span class="thinking"><span class="spinner"></span>${text}</span>`;
+  } else if (role === 'assistant') {
+    el.innerHTML = mdToHtml(text);       // 모델 답변만 마크다운 해석
   } else {
-    el.textContent = text;
+    el.textContent = text;               // 사용자 입력은 그대로
   }
   msgs.appendChild(el);
   msgs.scrollTop = msgs.scrollHeight;
@@ -95,7 +162,7 @@ async function send() {
         if (ev === 'token') {
           if (!started) { assistantEl.textContent = ''; started = true; }
           fullText += parsed.text || '';
-          assistantEl.textContent = fullText;
+          assistantEl.innerHTML = mdToHtml(fullText);
           msgs.scrollTop = msgs.scrollHeight;
         } else if (ev === 'tool_use_start') {
           const chip = document.createElement('div');
