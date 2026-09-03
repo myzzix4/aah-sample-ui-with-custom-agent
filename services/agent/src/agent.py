@@ -143,14 +143,14 @@ def _save_turn(session_id: str, user_text: str, assistant_text: str):
         # USER
         _ac_data().create_event(
             memoryId=_MEMORY_ID, sessionId=sid, actorId=_ACTOR_ID,
-            eventTimestamp=ts,
+            eventTimestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
             payload=[{"conversational": {"role": "USER",
                                               "content": {"text": user_text}}}],
         )
         # ASSISTANT
         _ac_data().create_event(
             memoryId=_MEMORY_ID, sessionId=sid, actorId=_ACTOR_ID,
-            eventTimestamp=ts + 1,
+            eventTimestamp=__import__("datetime").datetime.now(__import__("datetime").timezone.utc) + 1,
             payload=[{"conversational": {"role": "ASSISTANT",
                                               "content": {"text": assistant_text}}}],
         )

@@ -83,9 +83,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream(self, prompt: str, session_id: str):
         self.send_response(200)
-        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
         self.send_header("Cache-Control", "no-cache")
-        self.send_header("Connection", "keep-alive")
+        # Content-Length 도 chunked 도 없는 HTTP/1.0 스트림이다 — keep-alive 면 앞단
+        # 프록시가 응답의 끝을 몰라 전부 붙들고 있다(클라이언트는 60초 동안 0바이트).
+        # 연결을 닫는 것으로 끝을 알린다. Studio handler 와 같은 헤더.
+        self.send_header("Connection", "close")
+        self.send_header("X-Accel-Buffering", "no")
         self.end_headers()
         # AgentCore proxy 버퍼링 우회 — 첫 64KB padding
         self.wfile.write(b": " + b"x" * 65536 + b"\n\n")
