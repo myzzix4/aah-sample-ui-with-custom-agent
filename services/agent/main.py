@@ -11,7 +11,7 @@ import logging
 import os
 import sys
 import traceback
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from src.agent import run_invocation, run_invocation_stream
 
@@ -101,4 +101,6 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(os.getenv("PORT", "8080"))
     log.info("agent runtime listening on :%d", port)
-    HTTPServer(("0.0.0.0", port), Handler).serve_forever()
+    # ThreadingHTTPServer 여야 한다 — 단일 스레드면 SSE 로 LLM 을 스트리밍하는 동안
+    # AgentCore 의 /ping 헬스체크에 답을 못 해 컨테이너가 죽고 재시작된다(502).
+    ThreadingHTTPServer(("0.0.0.0", port), Handler).serve_forever()
