@@ -14,6 +14,14 @@ import hashlib
 import socket
 import json
 import logging
+# 표준 SDK(samsunglife-agent-kit) — 있으면 대화를 Control Plane 에 report_run 으로 남긴다.
+# 없으면 채팅은 그대로 되고 텔레메트리만 빠진다(healthz 의 telemetry 로 드러낸다).
+try:
+    from samsunglife_kit import controlplane as _sl
+    _SDK = True
+except Exception:          # 패키지 없음 — CodeArtifact 없는 빌드
+    _sl = None
+    _SDK = False
 import os
 import time
 import urllib.parse
@@ -162,9 +170,35 @@ def _invoke_jwt(payload: bytes, session_id: str, stream: bool):
     return resp if stream else resp.read().decode("utf-8", errors="replace")
 
 
+# Control Plane 이 배포 때 넣어 주는 값 — 이 UI 가 부르는 에이전트의 레지스트리 id
+CTP_AGENT_ID = os.getenv("CTP_AGENT_ID", "").strip()
+CTP_AGENT_NAME = os.getenv("CTP_AGENT_NAME", "").strip() or f"{os.getenv('UI_TITLE', 'UI')} chat"
+
+
+def _telemetry_on() -> bool:
+    try:
+        return bool(_SDK and CTP_AGENT_ID and _sl.enabled())
+    except Exception:
+        return False
+
+
+def _report(session_id: str, prompt: str, out: str, status: str, t0: float, error: str = "") -> None:
+    """대화 한 턴을 Control Plane 에 남긴다 (background · best-effort).
+    세션은 실제 Runtime 세션(_rt_session)으로 — 궤적(span)의 session.id 와 같아야 이어진다."""
+    if not _telemetry_on():
+        return
+    try:
+        _sl.report_run(CTP_AGENT_ID, name=CTP_AGENT_NAME,
+                       session_id=_rt_session(session_id),
+                       input=prompt, output=out or "", status=status,
+                       latency_ms=int((time.time() - t0) * 1000), error=error)
+    except Exception as e:
+        log.warning("report_run failed: %s", str(e)[:120])
+
+
 @app.get("/healthz")
 def healthz():
-    return jsonify({"status": "healthy",
+    return jsonify({"status": "healthy", "sdk": _SDK, "telemetry": _telemetry_on(),
                        "auth": "jwt" if _use_jwt() else "sigv4",
                        "agent_configured": bool(AGENT_ARN),
                        "region": AWS_REGION})
@@ -192,12 +226,16 @@ def chat():
 
     payload = json.dumps({"input": prompt, "session_id": session_id},
                               ensure_ascii=False).encode("utf-8")
+    t0 = time.time()
     try:
         out, citations, status_code = _invoke_buffered(payload, session_id)
+        _report(session_id, prompt, out, "success" if out else "error", t0,
+                "" if out else "empty response")
         return jsonify({"output": out, "citations": citations,
                         "session_id": session_id, "status_code": status_code})
     except Exception as e:
         log.error("invoke failed: %s", e)
+        _report(session_id, prompt, "", "error", t0, str(e)[:300])
         return jsonify({"error": str(e)[:500]}), 502
 
 
@@ -218,6 +256,9 @@ def chat_sse():
     @stream_with_context
     def gen():
         global _stream_supported
+        t0 = time.time()
+        acc: list = []          # 답변 본문 누적 — 대화 기록용
+        err = ""
         # 에이전트가 스트리밍을 지원하면 그대로 흘려보낸다.
         blocks = 0
         # 한 번 "안 흐른다"고 확인했으면 다음부터는 제한시간을 낭비하지 않는다.
@@ -241,6 +282,17 @@ def chat_sse():
                     while b"\n\n" in buf:
                         blk, buf = buf.split(b"\n\n", 1)
                         blocks += 1
+                        try:      # token 텍스트만 모은다 (event: token / kind: text)
+                            _ev, _data = "", ""
+                            for _ln in blk.decode("utf-8", errors="replace").split("\n"):
+                                if _ln.startswith("event:"): _ev = _ln[6:].strip()
+                                elif _ln.startswith("data:"): _data += _ln[5:].strip()
+                            _o = json.loads(_data) if _data else {}
+                            if isinstance(_o, dict) and (_ev or _o.get("kind")) in ("token", "text") \
+                                    and isinstance(_o.get("text"), str):
+                                acc.append(_o["text"])
+                        except Exception:
+                            pass
                         yield blk + b"\n\n"
                 if blocks:
                     _stream_supported = True
@@ -258,17 +310,21 @@ def chat_sse():
             try:
                 out, citations, _ = _invoke_buffered(payload, session_id)
                 if out:
+                    acc.append(out)
                     # 한 덩어리로 보낸다 — 쪼개서 흘리면 실제로는 안 그런 것을
                     # 토큰 스트리밍처럼 보이게 꾸미는 셈이다.
                     yield _sse("token", {"text": out})
                     if citations:
                         yield _sse("citations", {"citations": citations})
                 else:
+                    err = "empty response"
                     yield _sse("error", {"error": "에이전트가 빈 응답을 돌려줬습니다"})
             except Exception as e:
                 log.error("buffered 대체도 실패: %s", e)
+                err = str(e)[:300]
                 yield _sse("error", {"error": str(e)[:300]})
 
+        _report(session_id, prompt, "".join(acc), "error" if err else "success", t0, err)
         yield _sse("end", {"session_id": session_id})
 
     return Response(gen(), mimetype="text/event-stream",
